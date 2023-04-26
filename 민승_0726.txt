@@ -1,0 +1,77 @@
+
+import numpy as np
+import pandas as pd
+
+import os
+dir_path = os.chdir("C:/Users/yoon0/Desktop/민승/ms_data/cas_rncsv")
+file_list = os.listdir(dir_path)
+print(file_list)
+#%% real data 
+C0s = pd.read_csv('new C0_농도.csv', encoding = 'cp949', index_col = 0).dropna()
+C0_scenario = pd.read_csv('new C0_시나리오.csv', encoding = 'cp949', index_col = 0).T
+A=  pd.read_csv('공간특성_final.csv', index_col = 0)
+materials=  pd.read_csv( '물질특성_죄종.csv', index_col = 0)
+kmas =  pd.read_csv('kmas_final.csv', index_col = 0).dropna(axis=1)
+Q =  pd.read_csv('Q_final.csv', encoding = 'cp949', index_col = 0)
+C0s.columns =kmas.columns[1:]
+
+chemical_list = materials.index
+scenario_list = Q.index
+source_list = kmas.index[0: len(A.columns)]
+A.columns = source_list
+
+
+hm = materials['hm']
+kp = materials['kp']
+kdust = materials['kdust']
+
+def devision(df, x):
+    division_df= df[df.시나리오 ==x].drop(['시나리오'], axis=1)
+    return division_df
+
+#%% 분자
+def numer(i): # i : 시나리오 번호 ,0~15
+    x = scenario_list[i]
+    def c0(j):
+        a = C0_scenario[x]
+        b = C0s[j]
+        c = b.multiply(a)
+        return c
+    C0 =  pd.concat(map(c0,chemical_list), axis =1, keys = chemical_list)
+    kma = devision(kmas,x)
+    kma_inv = 1/kma
+    kma_inv.replace([np.inf, -np.inf], 0, inplace=True)
+    A_i_want = A.loc[x]
+    
+    formula1 = np.multiply(kma_inv, C0 ).transpose() # 1/kma * C0
+    formula2 =  formula1.dot(A_i_want) # sigma_i(A) * 1/kma * C0
+    formula3 = np.multiply(hm,formula2) #  hm*sigma_i(A) * 1/kma * C0
+    num = pd.DataFrame(formula3, columns = [x])
+    return num
+
+numerator = pd.concat(map(numer,range(0,len(scenario_list))), axis = 1).transpose()
+#%% 분모
+tsp = 20
+vt = 6
+
+botA = A.sum(axis=1)
+# Q,  𝑄(𝑠)
+Q_expand = np.full( len(chemical_list),1)
+term0 =np.multiply( np.array(Q), Q_expand.T) 
+# tsp*Q*kp , elementarywise product , #sc x #chm ,  𝑄(𝑠)×𝑇𝑠𝑝×𝐾𝑝(𝑐) 
+term1 = tsp*np.multiply( np.array(Q), np.array(kp).T) 
+# h𝑚(𝑐)×∑𝐴_𝑖 (k) 
+term2 =np.matmul( np.array(A.sum(axis=1)).reshape(len(scenario_list),1) , np.array(hm).reshape(1,len(chemical_list)))
+# #sc x #chm,  𝑉𝑡×𝑇𝑠𝑝×𝐾𝑝(𝑐)×𝐴_𝑏𝑜𝑡 (𝑠) 
+term3 = vt*tsp*np.multiply(np.array(botA).reshape(len(botA),1), np.array(kp).reshape(1,len(kp))) 
+
+denomitor = pd.DataFrame(data = term0 + term1 + term2 + term3,index=scenario_list, columns = chemical_list)
+
+#%% 기여율
+chemical = chemical_list[0]
+y = numerator/denomitor
+Con_air = y[chemical]
+# dust농도 = air농도 / kdust
+y_dust = y.mul(kdust, axis = 1)
+Con_dust = y_dust[chemical]
+#%% select\
